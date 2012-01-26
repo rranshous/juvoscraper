@@ -1,0 +1,3 @@
+[submodule "lib/discovery"]
+	path = lib/discovery
+	url = git@github.com:rranshous/discovery.git
