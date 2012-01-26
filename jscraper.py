@@ -1,13 +1,14 @@
 
 from lib.discovery import connect
 from lib.scraper import Scraper, o as so
-from lib.images import Images, o as to
+from lib.images import Images, o as io
 from lib.requester import Requester, o as ro
 
-from lib.thread_utils import thread_out_work
+#from lib.thread_utils import thread_out_work
 
 
 class JuvoScraper(object):
+
 
     def __init__(self, root_url):
         self.root_url = root_url
@@ -15,6 +16,8 @@ class JuvoScraper(object):
             self.root_url += '/'
         self.min_img_size = 300
         self.max_pages = 400
+
+        self.request_cookies = {}
 
     def generate_page_urls(self):
         print 'generating page urls'
@@ -25,15 +28,22 @@ class JuvoScraper(object):
         print 'validating page: %s' % url
         try:
             with connect(Requester) as c:
-                r = c.urlopen(ro.Request(url))
+                r = c.urlopen(ro.Request(url,
+                                         cookies=self.request_cookies))
         except ro.Exception, ex:
             print 'oException validating, retrying: %s %s' % (url,ex.msg)
             with connect(Requester) as c:
-                r = c.urlopen(ro.Request(url))
+                r = c.urlopen(ro.Request(url,
+                                         cookies=self.request_cookies))
         except Exception, ex:
             print 'Exception validating, retrying: %s %s' % (url,ex)
             with connect(Requester) as c:
-                r = c.urlopen(ro.Request(url))
+                r = c.urlopen(ro.Request(url,
+                                         cookies=self.request_cookies))
+
+        if r.cookies:
+            self.request_cookies.update(r.cookies)
+
         html = r.content
         try:
             if html and 'Sorry, nothing found' not in html:
@@ -52,6 +62,17 @@ class JuvoScraper(object):
 
 
     def update_scrape(self,sync=False):
+        """
+        starts at the newest page and scrapes until it
+        finds an image it's already stored
+
+        if sync is true will scrape entire site not stopping
+        when it finds repeat
+        """
+
+        print 'update scraping start'
+
+        added = 0
 
         for page_url in self.generate_page_urls():
 
@@ -71,6 +92,7 @@ class JuvoScraper(object):
             with connect(Scraper) as c:
                 print 'getting page images'
                 try:
+                    # TODO: be able to re-use cookies
                     img_urls = c.get_images(page_url)
                 except so.Exception, ex:
                     print 'oException getting images: %s %s' % (page_url,ex.msg)
@@ -108,10 +130,10 @@ class JuvoScraper(object):
                         raise ex
 
                 # create a tumblr image
-                tumblr_image = io.Image()
-                tumblr_image.data = image_data
-                tumblr_image.source_page_url = self.root_url
-                tumblr_image.source_url = img_url
+                image = io.Image()
+                image.data = image_data
+                image.source_page_url = self.root_url
+                image.source_url = img_url
 
                 # when we add an image to the tumblrimage
                 # service it will fill out stat's about the image
@@ -120,7 +142,7 @@ class JuvoScraper(object):
                 print 'uploading'
                 try:
                     with connect(Images) as c:
-                        tumblr_image = c.add_image(tumblr_image)
+                        image = c.add_image(image)
                 except io.Exception, ex:
                     print 'oException adding image: %s %s' % (img_url,ex)
                     if not sync:
@@ -132,12 +154,12 @@ class JuvoScraper(object):
 
                 try:
 
-                    assert tumblr_image.data, "image has no data"
-                    assert tumblr_image.xdim, "image has no x"
-                    assert tumblr_image.ydim, "image has no y"
-                    assert tumblr_image.size, "image has no size"
-                    assert tumblr_image.vhash, "image has no vhash"
-                    assert tumblr_image.shahash, "image has no sha"
+                    assert image.data, "image has no data"
+                    assert image.xdim, "image has no x"
+                    assert image.ydim, "image has no y"
+                    assert image.size, "image has no size"
+                    assert image.vhash, "image has no vhash"
+                    assert image.shahash, "image has no sha"
 
                 except Exception, ex:
                     print 'assert fail: %s %s' % (img_url,ex)
@@ -145,16 +167,44 @@ class JuvoScraper(object):
                         raise ex
 
                 # if our tumblr image now has an id than it was saved
-                if not tumblr_image.id and not sync:
+                if not image.id:
                     print 'image already uploaded'
-                    # we've already added this image before
-                    # we're done updating this blog
-                    return added
+                    if not sync:
+                        # we've already added this image before
+                        # we're done updating this blog
+                        return added
 
                 # we did it!
                 added += 1
 
         return added
 
+    def download_image_data(self, url, cookies={}):
+        # we want to download the image
+        with connect(Requester) as c:
+            try:
+                img_r = c.urlopen(ro.Request(url,
+                                             cookies=self.request_cookies))
+            except Exception, ex:
+                # fail, try again ?
+                print 'exception getting img: %s' % ex
+                try:
+                    img_r = c.urlopen(ro.Request(img_url,
+                                                 cookies=self.request_cookies))
+                except Exception:
+                    print 'refailed'
+                    return None
+
+        if img_r.cookies:
+            self.request_cookies.update(img_r.cookies)
+
+        if not img_r or img_r.status_code != 200:
+            return None
+
+        return img_r.content
+
+
 if __name__ == '__main__':
-    thread_scraper_work('http://nsfw.juvo.se/time',True)
+    s = JuvoScraper('http://nsfw.juvo.se/time')
+    print 'starting'
+    s.update_scrape(True)
